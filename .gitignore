@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+*.egg-info/
+dist/
+
+# Secrets
+.env
+*.env
+kaggle.json
+secrets.*
+*.pem
+
+# Data (ดึงจาก Kaggle ตาม README)
+*.csv
+*.parquet
+data/
+
+# Databricks / Spark
+.databricks/
+checkpoints/
+_checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# System / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
