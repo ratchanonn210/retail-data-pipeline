@@ -146,3 +146,21 @@ def reconcile(spark: SparkSession) -> bool:
     print(f"Match        : {matched}")
 
     return matched
+
+
+def check_idempotency(spark: SparkSession) -> bool:
+    """Check that rerunning the Bronze load does not add duplicate rows."""
+
+    rows_before = spark.table(BRONZE_TABLE).count()
+
+    load_bronze(spark)
+
+    rows_after = spark.table(BRONZE_TABLE).count()
+
+    passed = rows_before == rows_after
+
+    print(f"Rows before reload: {rows_before}")
+    print(f"Rows after reload : {rows_after}")
+    print(f"Idempotency check : {passed}")
+
+    return passed
