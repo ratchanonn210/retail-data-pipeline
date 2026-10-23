@@ -27,3 +27,8 @@ def table(name: str) -> str:
 
 
 BRONZE_TABLE = table("bronze_transactions")
+
+SILVER_TABLE = table("silver_transactions")
+
+# Spark datetime pattern. Must describe the same format as DATE_FORMAT above.
+SPARK_DATE_FORMAT = "M/d/yyyy H:mm"

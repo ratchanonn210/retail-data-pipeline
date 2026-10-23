@@ -1,4 +1,3 @@
-
 """Simulate incremental file arrivals in the landing zone."""
 
 import os
