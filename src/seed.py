@@ -1,4 +1,4 @@
-"""Simulate incremental file arrivals in the landing zone."""
+"""Split the raw dataset into batches and release them to Landing."""
 
 import os
 import shutil
@@ -6,86 +6,82 @@ import shutil
 import pandas as pd
 
 from config import (
-    BATCHES,
+    BATCHES_DIR,
     DATE_COLUMN,
     DATE_FORMAT,
-    LANDING,
+    LANDING_DIR,
     RAW_DIR,
     RAW_FILE,
 )
 
-UNPARSEABLE_BATCH = "unknown"
-
 
 def split_into_batches() -> int:
-    """Split raw CSV into monthly batches and return row count."""
+    """Split the raw CSV into monthly CSV files."""
+    source_path = os.path.join(RAW_DIR, RAW_FILE)
 
-    raw_path = os.path.join(RAW_DIR, RAW_FILE)
+    if not os.path.isfile(source_path):
+        raise FileNotFoundError(f"Raw file not found: {source_path}")
 
-    if not os.path.isfile(raw_path):
-        raise FileNotFoundError(f"Source CSV not found: {raw_path}")
+    df = pd.read_csv(source_path, dtype=str)
 
-    raw = pd.read_csv(raw_path, dtype=str)
+    if DATE_COLUMN not in df.columns:
+        raise ValueError(f"Missing required column: {DATE_COLUMN}")
 
-    if DATE_COLUMN not in raw.columns:
-        raise ValueError(
-            f"Missing required date column: {DATE_COLUMN}"
-        )
-
-    parsed_dates = pd.to_datetime(
-        raw[DATE_COLUMN],
+    dates = pd.to_datetime(
+        df[DATE_COLUMN],
         format=DATE_FORMAT,
         errors="coerce",
     )
 
-    batch_keys = (
-        parsed_dates.dt.strftime("%Y-%m")
-        .fillna(UNPARSEABLE_BATCH)
-    )
+    df["_batch_month"] = dates.dt.strftime("%Y-%m")
+    df["_batch_month"] = df["_batch_month"].fillna("unknown")
 
-    # Rebuild batch files for a fresh simulation.
-    shutil.rmtree(BATCHES, ignore_errors=True)
-    os.makedirs(BATCHES, exist_ok=True)
+    if os.path.exists(BATCHES_DIR):
+        shutil.rmtree(BATCHES_DIR)
 
-    for key, batch in raw.groupby(batch_keys, sort=True):
+    os.makedirs(BATCHES_DIR, exist_ok=True)
+
+    for month, batch_df in df.groupby("_batch_month", sort=True):
         output_path = os.path.join(
-            BATCHES,
-            f"transactions_{key}.csv",
+            BATCHES_DIR,
+            f"transactions_{month}.csv",
         )
-        batch.to_csv(output_path, index=False)
 
-    return len(raw)
+        batch_df.drop(columns="_batch_month").to_csv(
+            output_path,
+            index=False,
+        )
+
+    return len(df)
 
 
 def release_batches(n: int) -> list[str]:
-    """Copy the next n unreleased CSV batches into LANDING."""
-
+    """Copy up to n unreleased batch files into Landing."""
     if n < 0:
-        raise ValueError("n must be non-negative")
+        raise ValueError("n must be zero or greater")
 
-    if not os.path.isdir(BATCHES):
+    if not os.path.isdir(BATCHES_DIR):
         raise FileNotFoundError(
-            f"Batch directory not found: {BATCHES}. "
-            "Run split_into_batches() first."
+            "Batch directory not found. Run split_into_batches() first."
         )
 
-    os.makedirs(LANDING, exist_ok=True)
+    os.makedirs(LANDING_DIR, exist_ok=True)
 
-    already_released = set(os.listdir(LANDING))
+    released_files = set(os.listdir(LANDING_DIR))
 
-    pending = [
+    available_batches = sorted(
         filename
-        for filename in sorted(os.listdir(BATCHES))
+        for filename in os.listdir(BATCHES_DIR)
         if filename.endswith(".csv")
-        and filename not in already_released
-    ]
+        and filename not in released_files
+    )
 
-    released = pending[:n]
+    selected_batches = available_batches[:n]
 
-    for filename in released:
+    for filename in selected_batches:
         shutil.copy2(
-            os.path.join(BATCHES, filename),
-            os.path.join(LANDING, filename),
+            os.path.join(BATCHES_DIR, filename),
+            os.path.join(LANDING_DIR, filename),
         )
 
-    return released
+    return selected_batches
