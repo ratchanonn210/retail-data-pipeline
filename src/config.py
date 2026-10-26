@@ -1,34 +1,27 @@
-"""Central configuration for the retail lakehouse pipeline."""
+"""Shared configuration for the retail data pipeline."""
 
-# Unity Catalog
 CATALOG = "workspace"
 SCHEMA = "retail"
 VOLUME = "landing"
 
-# Volume paths
-BASE = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
+BASE_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 
-RAW_DIR = f"{BASE}/raw"
-BATCHES = f"{BASE}/batches"
-LANDING = f"{BASE}/incoming"
+RAW_DIR = f"{BASE_PATH}/raw"
+BATCHES_DIR = f"{BASE_PATH}/batches"
+LANDING_DIR = f"{BASE_PATH}/incoming"
 
-# Kaggle dataset
 KAGGLE_HANDLE = "fahadrehman07/retail-transaction-dataset"
 RAW_FILE = "Retail_Transaction_Dataset.csv"
 
-# Batch simulation
 DATE_COLUMN = "TransactionDate"
 DATE_FORMAT = "%m/%d/%Y %H:%M"
 
-# Delta tables
-def table(name: str) -> str:
-    """Return a fully qualified Unity Catalog table name."""
-    return f"{CATALOG}.{SCHEMA}.{name}"
+BRONZE_TABLE = f"{CATALOG}.{SCHEMA}.bronze_transactions"
 
-
-BRONZE_TABLE = table("bronze_transactions")
-
-SILVER_TABLE = table("silver_transactions")
-
-# Spark datetime pattern. Must describe the same format as DATE_FORMAT above.
-SPARK_DATE_FORMAT = "M/d/yyyy H:mm"
+CSV_OPTIONS = {
+    "header": "true",
+    "inferSchema": "false",
+    "multiLine": "true",
+    "quote": '"',
+    "escape": '"',
+}
