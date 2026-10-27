@@ -3,31 +3,29 @@
 import os
 import re
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import Column, DataFrame, SparkSession, functions as F
 
 from config import BRONZE_TABLE, CSV_OPTIONS, LANDING_DIR
 
 
-METADATA_COLUMNS = {
-    "_ingest_timestamp",
-    "_source_file",
-    "_file_modified_at",
-}
+METADATA_COLUMNS = ["_ingest_timestamp", "_source_file", "_file_modified_at"]
 
 
 def clean_name(name: str) -> str:
-    """Normalize a column name for Delta."""
+    """Make a column name safe for Delta, e.g. DiscountApplied(%) -> DiscountApplied_pct."""
     name = name.strip().replace("%", "pct")
-    name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-    return re.sub(r"_+", "_", name).strip("_")
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", name).strip("_")
+
+
+def file_name_from(column: str) -> Column:
+    """Extract the file name from a column that holds a full file path."""
+    return F.regexp_extract(F.col(column), r"([^/]+)$", 1)
 
 
 def get_landing_files() -> list[str]:
     """Return CSV filenames in Landing."""
     if not os.path.isdir(LANDING_DIR):
-        raise FileNotFoundError(
-            f"Landing directory not found: {LANDING_DIR}"
-        )
+        raise FileNotFoundError(f"Landing directory not found: {LANDING_DIR}")
 
     return sorted(
         filename
@@ -36,31 +34,12 @@ def get_landing_files() -> list[str]:
     )
 
 
-
-def get_source_columns(spark: SparkSession) -> list[str]:
-    """Return normalized source column names."""
+def read_landing(spark: SparkSession) -> DataFrame:
+    """Read all CSV files in Landing with every column as a string."""
     if not get_landing_files():
         raise ValueError("No CSV files found in Landing.")
 
-    df = (
-        spark.read
-        .options(**CSV_OPTIONS)
-        .csv(LANDING_DIR)
-    )
-
-    columns = [clean_name(name) for name in df.columns]
-
-    if len(columns) != len(set(columns)):
-        raise ValueError("Duplicate column names after cleaning.")
-
-    conflicts = METADATA_COLUMNS.intersection(columns)
-
-    if conflicts:
-        raise ValueError(
-            f"Reserved metadata columns found: {sorted(conflicts)}"
-        )
-
-    return columns
+    return spark.read.options(**CSV_OPTIONS).csv(LANDING_DIR)
 
 
 def create_bronze_table(spark: SparkSession) -> None:
@@ -68,46 +47,32 @@ def create_bronze_table(spark: SparkSession) -> None:
     if spark.catalog.tableExists(BRONZE_TABLE):
         return
 
-    source_columns = get_source_columns(spark)
-
-    source_df = (
-        spark.read
-        .options(**CSV_OPTIONS)
-        .csv(LANDING_DIR)
-        .limit(0)
-        .toDF(*source_columns)
+    columns = ",\n    ".join(
+        f"`{clean_name(name)}` STRING" for name in read_landing(spark).columns
     )
 
-    empty_df = (
-        source_df
-        .withColumn("_ingest_timestamp", F.lit(None).cast("timestamp"))
-        .withColumn("_source_file", F.lit(None).cast("string"))
-        .withColumn("_file_modified_at", F.lit(None).cast("timestamp"))
-    )
-
-    (
-        empty_df.write
-        .format("delta")
-        .saveAsTable(BRONZE_TABLE)
-    )
+    spark.sql(f"""
+        CREATE TABLE {BRONZE_TABLE} (
+            {columns},
+            _ingest_timestamp TIMESTAMP,
+            _source_file STRING,
+            _file_modified_at TIMESTAMP
+        ) USING DELTA
+    """)
 
 
 def load_bronze(spark: SparkSession) -> None:
     """Load new CSV files into Bronze using COPY INTO."""
-    if not get_landing_files():
-        raise ValueError("No CSV files found in Landing.")
-
     if not spark.catalog.tableExists(BRONZE_TABLE):
-        raise ValueError(
-            f"Bronze table does not exist: {BRONZE_TABLE}"
-        )
+        raise ValueError(f"Bronze table does not exist: {BRONZE_TABLE}")
 
-    source_columns = get_source_columns(spark)
+    raw_columns = read_landing(spark).columns
+    source_columns = [clean_name(name) for name in raw_columns]
 
     target_columns = [
-        column
-        for column in spark.table(BRONZE_TABLE).columns
-        if column not in METADATA_COLUMNS
+        name
+        for name in spark.table(BRONZE_TABLE).columns
+        if name not in METADATA_COLUMNS
     ]
 
     if source_columns != target_columns:
@@ -116,22 +81,12 @@ def load_bronze(spark: SparkSession) -> None:
             f"Source: {source_columns}; Bronze: {target_columns}"
         )
 
-    raw_columns = (
-        spark.read
-        .options(**CSV_OPTIONS)
-        .csv(LANDING_DIR)
-        .columns
-    )
-
     select_columns = ", ".join(
-        f"`{raw.replace('`', '``')}` "
-        f"AS `{clean_name(raw).replace('`', '``')}`"
-        for raw in raw_columns
+        f"`{raw}` AS `{clean}`" for raw, clean in zip(raw_columns, source_columns)
     )
 
     format_options = ", ".join(
-        f"'{key}' = '{value}'"
-        for key, value in CSV_OPTIONS.items()
+        f"'{key}' = '{value}'" for key, value in CSV_OPTIONS.items()
     )
 
     spark.sql(f"""
@@ -149,33 +104,99 @@ def load_bronze(spark: SparkSession) -> None:
     """)
 
 
-def rows_per_source_file(spark: SparkSession):
+def rows_per_source_file(spark: SparkSession) -> DataFrame:
     """Count Bronze rows by source file."""
     return (
         spark.table(BRONZE_TABLE)
-        .groupBy("_source_file")
+        .select(file_name_from("_source_file").alias("file_name"))
+        .groupBy("file_name")
         .count()
-        .orderBy("_source_file")
+        .orderBy("file_name")
     )
+
 
 
 def reconcile(spark: SparkSession) -> bool:
-    """Compare total row counts between Landing and Bronze."""
-    landing_rows = (
+    """Compare Bronze row counts with matching monthly batches in Raw."""
+    from config import RAW_DIR, RAW_FILE, DATE_COLUMN
+
+    raw_path = os.path.join(RAW_DIR, RAW_FILE)
+
+    # Read the complete raw dataset.
+    raw_df = (
         spark.read
         .options(**CSV_OPTIONS)
-        .csv(LANDING_DIR)
-        .count()
+        .option("header", True)
+        .csv(raw_path)
     )
 
-    bronze_rows = spark.table(BRONZE_TABLE).count()
-    passed = landing_rows == bronze_rows
+    # Assign each raw row to the same monthly batch as seed.py.
+    raw_df = raw_df.withColumn(
+        "_transaction_ts",
+        F.try_to_timestamp(
+            F.col(DATE_COLUMN),
+            F.lit("M/d/yyyy H:mm"),
+        ),
+    )
 
-    print(f"Landing rows: {landing_rows}")
-    print(f"Bronze rows:  {bronze_rows}")
+    raw_counts = (
+        raw_df
+        .withColumn(
+            "file_name",
+            F.when(
+                F.col("_transaction_ts").isNull(),
+                F.lit("transactions_unknown.csv"),
+            ).otherwise(
+                F.concat(
+                    F.lit("transactions_"),
+                    F.date_format(F.col("_transaction_ts"), "yyyy-MM"),
+                    F.lit(".csv"),
+                )
+            ),
+        )
+        .groupBy("file_name")
+        .count()
+        .withColumnRenamed("count", "raw_rows")
+    )
+
+    # Count rows in Bronze by original source filename.
+    bronze_counts = (
+        spark.table(BRONZE_TABLE)
+        .withColumn(
+            "file_name",
+            file_name_from("_source_file"),
+        )
+        .groupBy("file_name")
+        .count()
+        .withColumnRenamed("count", "bronze_rows")
+    )
+
+    # Only compare batches that have already reached Bronze.
+    comparison = (
+        bronze_counts
+        .join(raw_counts, on="file_name", how="left")
+        .fillna(0, subset=["raw_rows"])
+        .select("file_name", "raw_rows", "bronze_rows")
+    )
+
+    mismatches = comparison.filter(
+        F.col("raw_rows") != F.col("bronze_rows")
+    )
+
+    passed = mismatches.limit(1).count() == 0
+
+    print(f"Bronze batches checked: {comparison.count()}")
+    print(
+        f"Bronze rows checked: "
+        f"{comparison.agg(F.sum('bronze_rows')).first()[0] or 0:,}"
+    )
     print(f"Reconciliation passed: {passed}")
 
+    if not passed:
+        mismatches.show(truncate=False)
+
     return passed
+
 
 
 def check_idempotency(spark: SparkSession) -> bool:
