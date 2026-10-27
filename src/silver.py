@@ -8,11 +8,32 @@ from config import BRONZE_TABLE, CATALOG, SCHEMA
 
 SILVER_TABLE = f"{CATALOG}.{SCHEMA}.silver_transactions"
 REJECTED_TABLE = f"{CATALOG}.{SCHEMA}.silver_rejected"
+REQUIRED_COLUMNS = {
+    "CustomerID",
+    "ProductID",
+    "Quantity",
+    "Price",
+    "TransactionDate",
+    "PaymentMethod",
+    "StoreLocation",
+    "ProductCategory",
+    "DiscountApplied_pct",
+    "TotalAmount",
+}
+
+
+def validate_schema(df: DataFrame) -> None:
+    """Check that Bronze contains all required columns."""
+    missing_columns = REQUIRED_COLUMNS - set(df.columns)
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {sorted(missing_columns)}"
+        )
 
 
 def read_bronze(spark: SparkSession) -> DataFrame:
     return spark.table(BRONZE_TABLE)
-
 
 
 def clean_data(df: DataFrame) -> DataFrame:
@@ -70,6 +91,7 @@ def clean_data(df: DataFrame) -> DataFrame:
 
 
 def validate_data(df: DataFrame) -> tuple[DataFrame, DataFrame]:
+    """Split transactions into valid and rejected records."""
     invalid_conditions = [
         (F.col("CustomerID").isNull(), "missing_customer_id"),
         (F.col("ProductID").isNull(), "missing_product_id"),
@@ -82,7 +104,7 @@ def validate_data(df: DataFrame) -> tuple[DataFrame, DataFrame]:
         (F.col("DiscountApplied_pct") < 0, "discount_below_zero"),
         (F.col("DiscountApplied_pct") > 100, "discount_above_100"),
         (F.col("TotalAmount").isNull(), "invalid_total_amount"),
-        (F.col("TotalAmount") < 0, "negative_total_amount")
+        (F.col("TotalAmount") < 0, "negative_total_amount"),
     ]
 
     invalid_condition = F.lit(False)
@@ -92,7 +114,7 @@ def validate_data(df: DataFrame) -> tuple[DataFrame, DataFrame]:
 
     rejection_reason = F.concat_ws(
         ", ",
-        *[F.when(condition, reason) for condition, reason in invalid_conditions]
+        *[F.when(condition, F.lit(reason)) for condition, reason in invalid_conditions]
     )
 
     valid_df = df.filter(~invalid_condition)
@@ -148,49 +170,56 @@ def get_table_snapshot(spark: SparkSession) -> tuple[DataFrame, DataFrame]:
 
 
 def check_idempotency(spark: SparkSession) -> bool:
-    silver_before, rejected_before = get_table_snapshot(spark)
+    """Check whether rerunning Silver produces the same records."""
+    bronze_df = read_bronze(spark)
+    validate_schema(bronze_df)
 
-    silver_before.cache()
-    rejected_before.cache()
+    cleaned_df = clean_data(bronze_df)
+    expected_silver, expected_rejected = validate_data(cleaned_df)
+
+    expected_silver = expected_silver.cache()
+    expected_rejected = expected_rejected.cache()
 
     try:
-        silver_before.count()
-        rejected_before.count()
+        expected_silver.count()
+        expected_rejected.count()
 
         run_silver(spark)
 
-        silver_after, rejected_after = get_table_snapshot(spark)
+        actual_silver, actual_rejected = get_table_snapshot(spark)
 
         silver_unchanged = (
-            silver_before.exceptAll(silver_after).limit(1).count() == 0
-            and silver_after.exceptAll(silver_before).limit(1).count() == 0
+            expected_silver.exceptAll(actual_silver).limit(1).count() == 0
+            and actual_silver.exceptAll(expected_silver).limit(1).count() == 0
         )
 
         rejected_unchanged = (
-            rejected_before.exceptAll(rejected_after).limit(1).count() == 0
-            and rejected_after.exceptAll(rejected_before).limit(1).count() == 0
+            expected_rejected.exceptAll(actual_rejected).limit(1).count() == 0
+            and actual_rejected.exceptAll(expected_rejected).limit(1).count() == 0
         )
 
         passed = silver_unchanged and rejected_unchanged
 
+        print(f"Silver output unchanged: {silver_unchanged}")
+        print(f"Rejected output unchanged: {rejected_unchanged}")
         print(f"Idempotency passed: {passed}")
 
         return passed
 
     finally:
-        silver_before.unpersist()
-        rejected_before.unpersist()
+        expected_silver.unpersist()
+        expected_rejected.unpersist()
 
 
 def run_silver(spark: SparkSession) -> None:
     bronze_df = read_bronze(spark)
 
-    cleaned_df = clean_data(bronze_df)
+    validate_schema(bronze_df)
 
+    cleaned_df = clean_data(bronze_df)
     valid_df, rejected_df = validate_data(cleaned_df)
 
     save_silver(valid_df)
-
     save_rejected(rejected_df)
 
     print(f"Silver rows: {spark.table(SILVER_TABLE).count()}")
