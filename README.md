@@ -2,7 +2,7 @@
 
 An end-to-end retail data engineering portfolio project built with Databricks, PySpark, and Delta Lake. This project demonstrates how raw retail transaction data can be ingested, cleaned, validated, and transformed into analytics-ready datasets using the Medallion Architecture.
 
-##Project Overview
+## Project Overview
 
 The pipeline follows a structured data processing workflow:
 
