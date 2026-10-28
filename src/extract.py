@@ -18,9 +18,7 @@ def copy_to_raw_dir(source_dir: str) -> str:
     source_path = os.path.join(source_dir, RAW_FILE)
 
     if not os.path.isfile(source_path):
-        raise FileNotFoundError(
-            f"Source file not found: {source_path}"
-        )
+        raise FileNotFoundError(f"Source file not found: {source_path}")
 
     if os.path.getsize(source_path) == 0:
         raise ValueError(f"Source file is empty: {source_path}")
