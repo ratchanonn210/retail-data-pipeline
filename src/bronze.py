@@ -68,7 +68,6 @@ def load_bronze(spark: SparkSession) -> None:
 
     raw_columns = read_landing(spark).columns
     source_columns = [clean_name(name) for name in raw_columns]
-
     target_columns = [
         name
         for name in spark.table(BRONZE_TABLE).columns
@@ -115,7 +114,6 @@ def rows_per_source_file(spark: SparkSession) -> DataFrame:
     )
 
 
-
 def reconcile(spark: SparkSession) -> bool:
     """Compare Bronze row counts with matching monthly batches in Raw."""
     from config import RAW_DIR, RAW_FILE, DATE_COLUMN
@@ -135,8 +133,8 @@ def reconcile(spark: SparkSession) -> bool:
         "_transaction_ts",
         F.try_to_timestamp(
             F.col(DATE_COLUMN),
-            F.lit("M/d/yyyy H:mm"),
-        ),
+            F.lit("M/d/yyyy H:mm")
+        )
     )
 
     raw_counts = (
@@ -145,21 +143,20 @@ def reconcile(spark: SparkSession) -> bool:
             "file_name",
             F.when(
                 F.col("_transaction_ts").isNull(),
-                F.lit("transactions_unknown.csv"),
+                F.lit("transactions_unknown.csv")
             ).otherwise(
                 F.concat(
                     F.lit("transactions_"),
                     F.date_format(F.col("_transaction_ts"), "yyyy-MM"),
-                    F.lit(".csv"),
+                    F.lit(".csv")
                 )
-            ),
+            )
         )
         .groupBy("file_name")
         .count()
         .withColumnRenamed("count", "raw_rows")
     )
 
-    # Count rows in Bronze by original source filename.
     bronze_counts = (
         spark.table(BRONZE_TABLE)
         .withColumn(
@@ -196,7 +193,6 @@ def reconcile(spark: SparkSession) -> bool:
         mismatches.show(truncate=False)
 
     return passed
-
 
 
 def check_idempotency(spark: SparkSession) -> bool:
