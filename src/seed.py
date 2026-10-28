@@ -61,9 +61,7 @@ def release_batches(n: int) -> list[str]:
         raise ValueError("n must be zero or greater")
 
     if not os.path.isdir(BATCHES_DIR):
-        raise FileNotFoundError(
-            "Batch directory not found. Run split_into_batches() first."
-        )
+        raise FileNotFoundError("Batch directory not found. Run split_into_batches() first.")
 
     os.makedirs(LANDING_DIR, exist_ok=True)
 
