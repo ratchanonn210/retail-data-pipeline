@@ -1,4 +1,3 @@
-
 """Clean, validate, and store retail transactions in Silver tables."""
 
 from pyspark.sql import SparkSession, DataFrame, functions as F
@@ -18,7 +17,7 @@ REQUIRED_COLUMNS = {
     "StoreLocation",
     "ProductCategory",
     "DiscountApplied_pct",
-    "TotalAmount",
+    "TotalAmount"
 }
 
 
@@ -27,9 +26,7 @@ def validate_schema(df: DataFrame) -> None:
     missing_columns = REQUIRED_COLUMNS - set(df.columns)
 
     if missing_columns:
-        raise ValueError(
-            f"Missing required columns: {sorted(missing_columns)}"
-        )
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
 
 def read_bronze(spark: SparkSession) -> DataFrame:
@@ -47,7 +44,7 @@ def clean_data(df: DataFrame) -> DataFrame:
         "StoreLocation",
         "ProductCategory",
         "DiscountApplied_pct",
-        "TotalAmount",
+        "TotalAmount"
     ]
 
     for column in string_columns:
@@ -56,7 +53,7 @@ def clean_data(df: DataFrame) -> DataFrame:
             F.when(
                 F.trim(F.col(column)) == "",
                 F.lit(None),
-            ).otherwise(F.trim(F.col(column))),
+            ).otherwise(F.trim(F.col(column)))
         )
 
     return (
@@ -66,26 +63,18 @@ def clean_data(df: DataFrame) -> DataFrame:
         .withColumn(
             "TransactionDate",
             F.coalesce(
-                F.try_to_timestamp(
-                    "TransactionDate", F.lit("M/d/yyyy H:mm")
-                ),
-                F.try_to_timestamp(
-                    "TransactionDate", F.lit("M/d/yyyy HH:mm")
-                ),
-                F.try_to_timestamp(
-                    "TransactionDate", F.lit("MM/dd/yyyy HH:mm")
-                ),
-            ),
+                F.try_to_timestamp("TransactionDate", F.lit("M/d/yyyy H:mm")),
+                F.try_to_timestamp("TransactionDate", F.lit("M/d/yyyy HH:mm")),
+                F.try_to_timestamp("TransactionDate", F.lit("MM/dd/yyyy HH:mm"))
+            )
         )
         .withColumn(
             "DiscountApplied_pct",
-            F.expr(
-                "try_cast(regexp_replace(DiscountApplied_pct, '%', '') AS DOUBLE)"
-            ),
+            F.expr("try_cast(regexp_replace(DiscountApplied_pct, '%', '') AS DOUBLE)")
         )
         .withColumn(
             "TotalAmount",
-            F.expr("try_cast(TotalAmount AS DOUBLE)"),
+            F.expr("try_cast(TotalAmount AS DOUBLE)")
         )
     )
 
@@ -104,7 +93,7 @@ def validate_data(df: DataFrame) -> tuple[DataFrame, DataFrame]:
         (F.col("DiscountApplied_pct") < 0, "discount_below_zero"),
         (F.col("DiscountApplied_pct") > 100, "discount_above_100"),
         (F.col("TotalAmount").isNull(), "invalid_total_amount"),
-        (F.col("TotalAmount") < 0, "negative_total_amount"),
+        (F.col("TotalAmount") < 0, "negative_total_amount")
     ]
 
     invalid_condition = F.lit(False)
